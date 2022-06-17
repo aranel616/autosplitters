@@ -32,8 +32,11 @@ startup {
 	settings.Add("modeILSplitOnCheckpoint", true, "Split On Checkpoints", "modeIL");
 	#endregion
 
-	vars.Watch = (Action<string>)(key => { if(vars.Unity[key].Changed) vars.Log(key + ": " + vars.Unity[key].Old + " -> " + vars.Unity[key].Current); });
-    vars.Unity = Assembly.Load(File.ReadAllBytes(@"Components\UnityASL.bin")).CreateInstance("UnityASL.Unity");
+	#region Helper Setup
+	var bytes = File.ReadAllBytes(@"Components\LiveSplit.ASLHelper.bin");
+	var type = Assembly.Load(bytes).GetType("ASLHelper.Unity");
+	vars.Helper = Activator.CreateInstance(type, timer, this);
+	#endregion
 }
 
 onStart
@@ -45,67 +48,58 @@ init {
 	vars.FirstCheckpointId = 0;
 	vars.HasSplit = false;
 
-	vars.Unity.TryOnLoad = (Func<dynamic, bool>)(helper => {
-		var shl = helper.GetClass("Assembly-CSharp", 0x2000333); // Shell
-		var ls = helper.GetClass("Assembly-CSharp", 0x2000319);  // LevelService
-		var lrm = helper.GetClass("Assembly-CSharp", 0x2000318); // LevelRunModel
-		var fm = helper.GetClass("Assembly-CSharp", 0x20002C6);  // FishManager
-		var cs = helper.GetClass("Assembly-CSharp", 0x20002E0);  // CheckpointSystem
-		var cp = helper.GetClass("Assembly-CSharp", 0x20002DF);  // Checkpoint
-		var sm = helper.GetClass("Assembly-CSharp", 0x2000314);  // IAFSceneManager
+	vars.Helper.TryOnLoad = (Func<dynamic, bool>)(mono => {
+		var shl = mono.GetClass("Shell");
+		var ls = mono.GetClass("LevelService");
+		var lrm = mono.GetClass("LevelRunModel");
+		var fm = mono.GetClass("FishManager");
+		var cs = mono.GetClass("CheckpointSystem");
+		var cp = mono.GetClass("Checkpoint");
+		var sm = mono.GetClass("IAFSceneManager");
 
-		vars.Unity.Make<float>(shl.Static, shl["Instance"], shl["_levelService"], ls["_currentRunStats"], lrm["_levelTimer"]).Name = "_levelTimer";
-		vars.Unity.Make<int>(shl.Static, shl["Instance"], shl["_levelService"], ls["_currentRunStats"], lrm["_starsDeaths"]).Name = "_starsDeaths";
-		vars.Unity.Make<int>(shl.Static, shl["Instance"], shl["_levelService"], ls["_currentRunStats"], lrm["_currentRunId"]).Name = "_currentRunId";
-		vars.Unity.Make<int>(shl.Static, shl["Instance"], shl["_levelService"], ls["_levelsFishManager"], fm["_checkpointSystem"], cs["_lastCheckpoint"], cp["CheckpointID"]).Name = "_lastCheckpointId";
-		vars.Unity.Make<int>(shl.Static, shl["Instance"], shl["_sceneManager"], sm["_currentSceneType"]).Name = "_currentSceneType";
-		vars.Unity.Make<bool>(shl.Static, shl["Instance"], shl["_sceneManager"], sm["_currentLoadingOperation"]).Name = "_currentLoadingOperation";
+		vars.Helper["_levelTimer"] = shl.Make<float>("Instance", "_levelService", ls["_currentRunStats"], lrm["_levelTimer"]);
+		vars.Helper["_starsDeaths"] = shl.Make<int>("Instance", "_levelService", ls["_currentRunStats"], lrm["_starsDeaths"]);
+		vars.Helper["_currentRunId"] = shl.Make<int>("Instance", "_levelService", ls["_currentRunStats"], lrm["_currentRunId"]);
+		vars.Helper["_lastCheckpointId"] = shl.Make<int>("Instance", "_levelService", ls["_levelsFishManager"], fm["_checkpointSystem"], cs["_lastCheckpoint"], cp["CheckpointID"]);
+		vars.Helper["_currentSceneType"] = shl.Make<int>("Instance", "_sceneManager", sm["_currentSceneType"]);
+		vars.Helper["_currentLoadingOperation"] = shl.Make<bool>("Instance", "_sceneManager", sm["_currentLoadingOperation"]);
 
-		vars.Unity["_lastCheckpointId"].FailAction = MemoryWatcher.ReadFailAction.SetZeroOrNull;
+		vars.Helper["_lastCheckpointId"].FailAction = MemoryWatcher.ReadFailAction.SetZeroOrNull;
 
 		return true;
 	});
 
-	vars.Unity.Load(game);
+	vars.Helper.Load();
 }
 
 update {
-	if (!vars.Unity.Loaded) {
+	if (!vars.Helper.Update()) {
 		return false;
 	}
 
-	vars.Unity.Update();
-
-	current.LevelTimer = vars.Unity["_levelTimer"].Current;
-	current.StarsDeaths = vars.Unity["_starsDeaths"].Current;
-	current.RunId = vars.Unity["_currentRunId"].Current;
-	current.LastCheckpointId = vars.Unity["_lastCheckpointId"].Current;
-	current.SceneType = vars.Unity["_currentSceneType"].Current;
-	current.LoadingOperation = vars.Unity["_currentLoadingOperation"].Current;
-
-	if (old.RunId != current.RunId) {
+	if (vars.Helper["_currentRunId"].Old != vars.Helper["_currentRunId"].Current) {
 		vars.InLevel = true;
 	}
 
-	if (old.SceneType == vars.SceneTypes["Map"]) {
+	if (vars.Helper["_currentSceneType"].Old == vars.SceneTypes["Map"]) {
 		vars.InLevel = false;
 	}
 }
 
 start {
 	// Do not start unless you are in a level
-	if (current.SceneType != vars.SceneTypes["Level"]) {
+	if (vars.Helper["_currentSceneType"].Current != vars.SceneTypes["Level"]) {
 		return;
 	}
 
 	// Any% starts on level select
 	if (settings["modeAny"]) {
-		return old.SceneType == vars.SceneTypes["Map"] && current.SceneType == vars.SceneTypes["Level"];
+		return (vars.Helper["_currentSceneType"].Old == vars.SceneTypes["Map"] && vars.Helper["_currentSceneType"].Current == vars.SceneTypes["Level"]);
 	}
 
 	// IL starts after loading time, tracking in game time
-	if (settings["modeIL"] && old.RunId != current.RunId) {
-		vars.FirstCheckpointId = current.LastCheckpointId;
+	if (settings["modeIL"] && vars.Helper["_currentRunId"].Old != vars.Helper["_currentRunId"].Current) {
+		vars.FirstCheckpointId = vars.Helper["_lastCheckpointId"].Current;
 		vars.HasSplit = false;
 		return true;
 	}
@@ -113,15 +107,15 @@ start {
 
 split {
 	// Ending screen is shown - split for Any% and IL
-	if (old.StarsDeaths == 0 && current.StarsDeaths != 0) {
+	if (vars.Helper["_starsDeaths"].Old == 0 && vars.Helper["_starsDeaths"].Current != 0) {
 		vars.InLevel = false;
-		vars.PreviousTime += current.LevelTimer;
+		vars.PreviousTime += vars.Helper["_levelTimer"].Current;
 		return true;
 	}
 
 	// Last Checkpoint ID has changed - split for IL.
 	if (settings["modeILSplitOnCheckpoint"]) {
-		if (old.LastCheckpointId != current.LastCheckpointId && (!vars.HasSplit || current.LastCheckpointId != vars.FirstCheckpointId)) {
+		if (vars.Helper["_lastCheckpointId"].Old != vars.Helper["_lastCheckpointId"].Current && (!vars.HasSplit || vars.Helper["_lastCheckpointId"].Current != vars.FirstCheckpointId)) {
 			vars.HasSplit = true;
 			return true;
 		}
@@ -129,18 +123,18 @@ split {
 }
 
 reset {
-	if (vars.InLevel && current.SceneType == vars.SceneTypes["Map"]) {
+	if (vars.InLevel && vars.Helper["_currentSceneType"].Current == vars.SceneTypes["Map"]) {
 		return true;
 	}
 
-	if (settings["modeIL"] && current.LoadingOperation) {
+	if (settings["modeIL"] && vars.Helper["_currentLoadingOperation"].Current) {
 		vars.FirstCheckpointId = 0;
 		return true;
 	}
 }
 
 gameTime {
-	var time = Math.Round(current.LevelTimer, 2);
+	var time = Math.Round(vars.Helper["_levelTimer"].Current, 2);
 
 	if (settings["modeAny"]) {
 		time = vars.InLevel ? time + vars.PreviousTime : vars.PreviousTime;
@@ -154,9 +148,9 @@ isLoading {
 }
 
 exit {
-	vars.Unity.Reset();
+	vars.Helper.Dispose();
 }
 
 shutdown {
-	vars.Unity.Reset();
+	vars.Helper.Dispose();
 }

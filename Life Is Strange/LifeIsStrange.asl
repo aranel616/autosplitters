@@ -5,6 +5,9 @@ state("LifeIsStrange")
     string5 map : "LifeIsStrange.exe", 0x122DFF8;
     float fov : "LifeIsStrange.exe", 0x011E4DF8, 0xA20, 0x1C, 0x120, 0x98, 0x794, 0x590;
     int walkingAnimation : "LifeIsStrange.exe", 0x011E4DF8, 0x7BC;
+    float cameraX : "LifeIsStrange.exe", 0x12072C0;
+    float cameraY : "LifeIsStrange.exe", 0x12072C4;
+    float cameraZ : "LifeIsStrange.exe", 0x12072C8;
 }
 
 startup {
@@ -15,7 +18,7 @@ startup {
 
     settings.Add("singleEpisode", false, "Single episode mode [EXPERIMENTAL - SEE TOOLTIP]");
     settings.SetToolTip("singleEpisode", @"Attempts to start and stop the timer at the appropriate times for single episode runs.
-Currently starts the timer for Episodes 1 and 3, and stops the timer for Episodes 1, 3, and 4.
+Currently starts the timer for Episodes 1, 3 and 5, and stops the timer for Episodes 1, 3, and 4.
 May not work.");
 }
 
@@ -48,7 +51,14 @@ start
 
         // @todo Episode 4 starts on first dialogue choice
 
-        // @todo Episode 5 starts on first camera movement
+        // Episode 5 starts on first camera movement
+        if (
+            (Math.Round(old.cameraX, 3) == -582.353 && old.cameraX != current.cameraX) &&
+            (Math.Round(old.cameraY, 3) == 94.093 && old.cameraY != current.cameraY) &&
+            (Math.Round(old.cameraZ, 3) == 152.826 && old.cameraZ != current.cameraZ)
+        ) {
+            willStart = true;
+        }
     }
 
     if (willStart) {
@@ -127,7 +137,7 @@ split
             return true;
         }
 
-        // @todo Final split in episode 5
+        // @todo Final split in episode 5 when you pick a choice
     }
 
     /*** Unless otherwise accounted for above, splits occur on every map change ***/
